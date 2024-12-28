@@ -66,3 +66,73 @@
     (var-set ticket-price new-price)
     (ok true)))
 
+;; Set refund rate (only contract owner)
+(define-public (set-refund-rate (new-rate uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (<= new-rate u100) err-invalid-refund-rate) ;; Ensure rate is not more than 100%
+    (var-set refund-rate new-rate)
+    (ok true)))
+
+;; Set ticket reserve limit (only contract owner)
+(define-public (set-ticket-reserve-limit (new-limit uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (>= new-limit (var-get total-tickets-sold)) err-reserve-limit-exceeded)
+    (var-set tickets-reserve-limit new-limit)
+    (ok true)))
+
+;; Add tickets for sale
+(define-public (add-tickets-for-sale (amount uint))
+  (let (
+    (current-balance (default-to u0 (map-get? user-ticket-balance tx-sender)))
+    (current-for-sale (get amount (default-to {amount: u0, price: u0} (map-get? tickets-for-sale {user: tx-sender}))))
+    (new-for-sale (+ amount current-for-sale))
+  )
+    (asserts! (> amount u0) err-invalid-ticket-amount) ;; Ensure amount is greater than 0
+    (asserts! (>= current-balance new-for-sale) err-not-enough-tickets)
+    (try! (update-ticket-reserve (to-int amount)))
+    (map-set tickets-for-sale {user: tx-sender} {amount: new-for-sale, price: (var-get ticket-price)})
+    (ok true)))
+
+;; Remove tickets from sale
+(define-public (remove-tickets-from-sale (amount uint))
+  (let (
+    (current-for-sale (get amount (default-to {amount: u0, price: u0} (map-get? tickets-for-sale {user: tx-sender}))))
+  )
+    (asserts! (>= current-for-sale amount) err-not-enough-tickets)
+    (try! (update-ticket-reserve (to-int (- amount))))
+    (map-set tickets-for-sale {user: tx-sender} 
+             {amount: (- current-for-sale amount), price: (get price (default-to {amount: u0, price: u0} (map-get? tickets-for-sale {user: tx-sender})))})
+    (ok true)))
+
+;; Buy tickets
+(define-public (buy-ticket (seller principal) (amount uint))
+  (let (
+    (sale-data (default-to {amount: u0, price: u0} (map-get? tickets-for-sale {user: seller})))
+    (ticket-cost (* amount (get price sale-data)))
+    (refund-amount (calculate-refund amount))
+    (buyer-balance (default-to u0 (map-get? user-stx-balance tx-sender)))
+    (seller-balance (default-to u0 (map-get? user-stx-balance seller)))
+    (owner-balance (default-to u0 (map-get? user-stx-balance contract-owner)))
+  )
+    (asserts! (not (is-eq tx-sender seller)) err-same-user)
+    (asserts! (> amount u0) err-invalid-ticket-amount)
+    (asserts! (>= (get amount sale-data) amount) err-not-enough-tickets)
+    (asserts! (>= buyer-balance ticket-cost) err-not-enough-tickets)
+
+    ;; Update seller's ticket balance and for-sale amount
+    (map-set user-ticket-balance seller (- (default-to u0 (map-get? user-ticket-balance seller)) amount))
+    (map-set tickets-for-sale {user: seller} 
+             {amount: (- (get amount sale-data) amount), price: (get price sale-data)})
+
+    ;; Update buyer's STX and ticket balance
+    (map-set user-stx-balance tx-sender (- buyer-balance ticket-cost))
+    (map-set user-ticket-balance tx-sender (+ (default-to u0 (map-get? user-ticket-balance tx-sender)) amount))
+
+    ;; Update seller's and contract owner's STX balance
+    (map-set user-stx-balance seller (+ seller-balance ticket-cost))
+    (map-set user-stx-balance contract-owner (+ owner-balance refund-amount))
+
+    (ok true)))
+
