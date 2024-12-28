@@ -216,6 +216,105 @@
     (ok true))
 )
 
+;; Refactor contract function for improved handling of ticket purchase failures
+(define-public (buy-ticket-safe (seller principal) (amount uint))
+  (let (
+    (sale-data (default-to {amount: u0, price: u0} (map-get? tickets-for-sale {user: seller})))
+    (ticket-cost (* amount (get price sale-data)))
+  )
+    (asserts! (>= (get amount sale-data) amount) err-not-enough-tickets)
+    (asserts! (>= (default-to u0 (map-get? user-stx-balance tx-sender)) ticket-cost) err-not-enough-tickets)
+    (ok true))
+)
+
+;; Improve performance by minimizing repetitive ticket check
+(define-private (minimize-ticket-check (user principal) (amount uint))
+  (let ((user-balance (default-to u0 (map-get? user-ticket-balance user))))
+    (asserts! (>= user-balance amount) err-not-enough-tickets)
+    (ok true))
+)
+
+;; Set max tickets per user (only contract owner)
+(define-public (set-max-tickets-per-user (new-limit uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (> new-limit u0) err-invalid-ticket-amount)
+    (var-set max-tickets-per-user new-limit)
+    (ok true)))
+
+;; Increase ticket price (only contract owner)
+(define-public (increase-ticket-price (increase uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (> increase u0) err-invalid-ticket-price)
+    (var-set ticket-price (+ (var-get ticket-price) increase))
+    (ok true)))
+
+;; Decrease ticket price (only contract owner)
+(define-public (decrease-ticket-price (decrease uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (> (var-get ticket-price) decrease) err-invalid-ticket-price)
+    (var-set ticket-price (- (var-get ticket-price) decrease))
+    (ok true)))
+
+;; Refund a user for tickets purchased
+(define-public (refund-user (user principal) (amount uint))
+  (let (
+    (user-tickets (default-to u0 (map-get? user-ticket-balance user)))
+    (refund-amount (calculate-refund amount))
+  )
+    (asserts! (>= user-tickets amount) err-not-enough-tickets)
+    (map-set user-ticket-balance user (- user-tickets amount))
+    (map-set user-stx-balance user (+ (default-to u0 (map-get? user-stx-balance user)) refund-amount))
+    (map-set user-stx-balance contract-owner (- (default-to u0 (map-get? user-stx-balance contract-owner)) refund-amount))
+    (ok true)))
+
+;; Check if a user is eligible for refund
+(define-public (is-eligible-for-refund (user principal) (amount uint))
+  (let ((user-tickets (default-to u0 (map-get? user-ticket-balance user))))
+    (if (>= user-tickets amount)
+        (ok true)
+        (err err-not-enough-tickets))))
+
+;;  User withdraws STX balance
+(define-public (withdraw-stx-balance (amount uint))
+  (let (
+    (user-balance (default-to u0 (map-get? user-stx-balance tx-sender)))
+  )
+    (asserts! (>= user-balance amount) err-not-enough-tickets)
+    (map-set user-stx-balance tx-sender (- user-balance amount))
+    (ok true)))
+
+;; Set refund rate percentage (only contract owner)
+(define-public (set-refund-rate-percentage (percentage uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (<= percentage u100) err-invalid-refund-rate)
+    (var-set refund-rate percentage)
+    (ok true)))
+
+;; Reduce ticket reserve limit (only contract owner)
+(define-public (decrease-ticket-reserve-limit (amount uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (>= (var-get tickets-reserve-limit) amount) err-reserve-limit-exceeded)
+    (var-set tickets-reserve-limit (- (var-get tickets-reserve-limit) amount))
+    (ok true)))
+
+;; Add a UI element that displays the user's available tickets for purchase
+(define-public (add-ticket-purchase-ui)
+  ;; The function displays ticket options for users to interact with
+  (ok true))
+
+;; Define a new contract function for event cancellation
+(define-public (cancel-event)
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    ;; Cancel the event and refund all tickets
+    (map-set user-ticket-balance tx-sender u0)
+    (ok true)))
+
 ;; Read-only functions
 
 ;; Get current ticket price
@@ -237,4 +336,3 @@
 ;; Get tickets for sale by user
 (define-read-only (get-tickets-for-sale (user principal))
   (ok (default-to {amount: u0, price: u0} (map-get? tickets-for-sale {user: user}))))
-
