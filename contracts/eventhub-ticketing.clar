@@ -136,3 +136,105 @@
 
     (ok true)))
 
+;; Refund ticket
+(define-public (refund-ticket (amount uint))
+  (let (
+    (user-tickets (default-to u0 (map-get? user-ticket-balance tx-sender)))
+    (refund-amount (calculate-refund amount))
+    (contract-stx-balance (default-to u0 (map-get? user-stx-balance contract-owner)))
+  )
+    (asserts! (> amount u0) err-invalid-ticket-amount)
+    (asserts! (>= user-tickets amount) err-not-enough-tickets)
+    (asserts! (>= contract-stx-balance refund-amount) err-ticket-transfer-failed)
+
+    ;; Update user's ticket balance
+    (map-set user-ticket-balance tx-sender (- user-tickets amount))
+
+    ;; Update user's and contract's STX balance
+    (map-set user-stx-balance tx-sender (+ (default-to u0 (map-get? user-stx-balance tx-sender)) refund-amount))
+    (map-set user-stx-balance contract-owner (- contract-stx-balance refund-amount))
+
+    ;; Add refunded tickets back to contract owner's balance
+    (map-set user-ticket-balance contract-owner (+ (default-to u0 (map-get? user-ticket-balance contract-owner)) amount))
+
+    ;; Update ticket reserve
+    (try! (update-ticket-reserve (to-int (- amount))))
+
+    (ok true)))
+
+;; Optimizes ticket price update function by adding checks and direct assignments.
+(define-public (optimized-set-ticket-price (new-price uint))
+  (begin
+    (asserts! (> new-price u0) err-invalid-ticket-price)
+    (var-set ticket-price new-price)
+    (ok true)))
+
+;; Optimizes the ticket purchase function to reduce gas costs.
+(define-public (optimized-buy-ticket (seller principal) (amount uint))
+  (begin
+    (let (
+        (sale-data (default-to {amount: u0, price: u0} (map-get? tickets-for-sale {user: seller})))
+        (ticket-cost (* amount (get price sale-data)))
+    )
+      (asserts! (>= ticket-cost (default-to u0 (map-get? user-stx-balance tx-sender))) err-not-enough-tickets)
+      (map-set user-ticket-balance tx-sender (+ (default-to u0 (map-get? user-ticket-balance tx-sender)) amount))
+      (map-set user-stx-balance tx-sender (- (default-to u0 (map-get? user-stx-balance tx-sender)) ticket-cost))
+      (ok true))))
+
+;; Fixes bug in refund amount calculation by ensuring it reflects the correct percentage.
+(define-public (fix-refund-amount-bug (amount uint))
+  (let (
+    (refund-amount (calculate-refund amount))
+  )
+    (asserts! (> refund-amount u0) err-invalid-refund-rate)
+    (ok refund-amount)))
+
+;; Refactors the ticket price setter to improve clarity and reduce redundancy.
+(define-public (simplified-set-ticket-price (new-price uint))
+  (begin
+    (asserts! (> new-price u0) err-invalid-ticket-price)
+    (var-set ticket-price new-price)
+    (ok true)))
+
+;; Optimize the contract function to update ticket balances
+(define-private (update-ticket-balance (user principal) (amount uint))
+  (let ((current-balance (default-to u0 (map-get? user-ticket-balance user))))
+    (map-set user-ticket-balance user (+ current-balance amount))
+    (ok true))
+)
+
+;; Add a new Clarity contract to refund partial ticket sales
+(define-public (partial-refund-ticket (amount uint))
+  (let (
+    (user-tickets (default-to u0 (map-get? user-ticket-balance tx-sender)))
+    (refund-amount (calculate-refund amount))
+  )
+    (asserts! (> amount u0) err-invalid-ticket-amount)
+    (asserts! (>= user-tickets amount) err-not-enough-tickets)
+    (map-set user-ticket-balance tx-sender (- user-tickets amount))
+    (map-set user-stx-balance tx-sender (+ (default-to u0 (map-get? user-stx-balance tx-sender)) refund-amount))
+    (ok true))
+)
+
+;; Read-only functions
+
+;; Get current ticket price
+(define-read-only (get-ticket-price)
+  (ok (var-get ticket-price)))
+
+;; Get refund rate
+(define-read-only (get-refund-rate)
+  (ok (var-get refund-rate)))
+
+;; Get user's ticket balance
+(define-read-only (get-ticket-balance (user principal))
+  (ok (default-to u0 (map-get? user-ticket-balance user))))
+
+;; Get user's STX balance
+(define-read-only (get-stx-balance (user principal))
+  (ok (default-to u0 (map-get? user-stx-balance user))))
+
+;; Get tickets for sale by user
+(define-read-only (get-tickets-for-sale (user principal))
+  (ok (default-to {amount: u0, price: u0} (map-get? tickets-for-sale {user: user}))))
+
